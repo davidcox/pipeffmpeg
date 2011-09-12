@@ -402,55 +402,111 @@ class BitmapFileHeader(ctypes.LittleEndianStructure):
     ]
 
 def sread(fd,cobj):
-    ctypes.memmove(ctypes.pointer(cobj),ctypes.c_char_p(fd.read(ctypes.sizeof(cobj))),ctypes.sizeof(cobj))
+    ctypes.memmove(ctypes.pointer(cobj), 
+                   ctypes.c_char_p(fd.read(ctypes.sizeof(cobj))),
+                   ctypes.sizeof(cobj))
 
 
 class InputVideoStream:
     """to read a video to writeout by frames and audio stream"""
-    def __init__(self, path='test.mp4'):
-        self.rate = 15
+    def __init__(self, path, cache_size=1):
+        
         self.ivcodec = 'bmp'
         self.filepath = path
-        self.frames = 10
         self.iformat = 'image2pipe'
 
-    def open(self, path):
-        self.filepath = path
+        self.info = get_info(path)
+        
+        self.frame_time = 1. / 30.
+        self.start_time = 0.0
+        self.duration = 0.0
+        
+        if 'streams' in self.info:
+            self.streams = self.info['streams']
+            stream = None
+            if len(self.streams) > 0:
+                stream = self.streams[0]
+            
+                if 'time_base' in stream:
+                    tb = stream['time_base']
+                    split_tb = tb.split("/")
+                    if len(split_tb) > 1:
+                        self.frame_time = float(split_tb[0]) / float(split_tb[1])
+                    else:
+                        self.frame_Time = float(split_tb[0])
+        
+                if 'start_time' in stream:
+                    self.start_time = float(stream['start_time'])
+        
+                if 'duration' in stream:
+                    self.duration = float(stream['duration'])
+
+        self.cache_size = cache_size
+        self.cache = []
+        self.cache_offset = None
+        
+        
+    def __getitem__(self, index):
+        
+        if self.cache_offset is not None and\
+           index > self.cache_offset and\
+           index < self.cache_offset + self.cache_size:
+           
+           return self.cache[ index - self.cache_offset ]
+        
+        
+        time_offset = index * self.frame_time
+        
+        if time_offset > self.duration:
+            raise IndexError()
+        
         cmd = [
             FFMPEG_BIN,
             '-i', self.filepath,
             '-f', self.iformat,
             '-vcodec', self.ivcodec,
+            '-vframes', str(self.cache_size),
+            '-ss', str(time_offset),
             '-' # it means output to pipe
         ]
+                
         self.p = sp.Popen(
             cmd,
             stdin=sp.PIPE,
             stdout=sp.PIPE,
             stderr=sp.PIPE,
         )
-    def readframe(self):
-    	"""post each frame as bmp image(iterator)"""
-        while True:
+                
+        #self.p.communicate()
+        
+        fd = self.p.stdout
+        
+        self.cache = []
+        self.cache_offset = index
+        for i in range(0, self.cache_size):
             bmfheader = BitmapFileHeader()
-            sread(self.p.stdout, bmfheader)
+            sread(fd, bmfheader)
             if bmfheader.bfType != 0x4d42: # the last frame is appended with some broken bytes
-                break
+                return None
             # reconvert to python string
             bmp = ctypes.string_at(ctypes.pointer(bmfheader), ctypes.sizeof(bmfheader))
             # BitmapFileHeader and rest data
-            bmp += self.p.stdout.read(bmfheader.bfSize - ctypes.sizeof(bmfheader))
-            yield bmp
+            #bmp += self.p.stdout.read(bmfheader.bfSize - ctypes.sizeof(bmfheader))
+            bmp += fd.read(bmfheader.bfSize - ctypes.sizeof(bmfheader))
+            self.cache.append(bmp)
 
         self.p.stdin.close()
         del self.p
+
+        return self.cache[0]
+
 
 class OutVideoStream:
     """to write a video with posting each frame"""
     def __init__(self, path=None):
         self.ipix_fmt = 'rgb24'
         self.iformat = 'rawvideo'
-        self.filepath = 'test2.avi'
+        self.filepath = path
         if path: self.filepath = path
         self.isize = '352x240'
         self.opix_fmt = 'bgr24'
