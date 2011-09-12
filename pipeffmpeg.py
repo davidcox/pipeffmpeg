@@ -407,14 +407,15 @@ def sread(fd,cobj):
 
 class InputVideoStream:
     """to read a video to writeout by frames and audio stream"""
-    def __init__(self, path=None):
+    def __init__(self, path='test.mp4'):
         self.rate = 15
         self.ivcodec = 'bmp'
-        self.filepath = 'test.mp4'
+        self.filepath = path
         self.frames = 10
         self.iformat = 'image2pipe'
 
     def open(self, path):
+        self.filepath = path
         cmd = [
             FFMPEG_BIN,
             '-i', self.filepath,
